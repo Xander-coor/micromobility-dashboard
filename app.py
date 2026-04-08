@@ -945,7 +945,7 @@ def main():
     # ─── Category filter buttons ──────────────────────────────────────────────
     all_cats = list(CATEGORIES.keys())
     if "selected_cats_set" not in st.session_state:
-        st.session_state["selected_cats_set"] = set(all_cats)
+        st.session_state["selected_cats_set"] = set()  # 預設全不選 = 顯示全部
     sel: set = st.session_state["selected_cats_set"]
 
     # Build per-button CSS using unique marker divs inside each column.
