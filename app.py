@@ -670,7 +670,7 @@ SCRAPER_MAP = {
 }
 
 
-def render_articles(articles: list):
+def render_articles(articles: list, key_prefix: str = ""):
     if not articles:
         st.info("此分類沒有文章。")
         return
@@ -708,7 +708,7 @@ def render_articles(articles: list):
                 with col_link:
                     st.markdown(f"[原文連結 →]({item['url']})")
                 with col_btn:
-                    if st.button(btn_label, key=f"btn_{item['url']}"):
+                    if st.button(btn_label, key=f"btn_{key_prefix}_{item['url']}"):
                         st.session_state[show_key] = not is_open
 
                 if st.session_state.get(show_key, False):
@@ -828,11 +828,11 @@ def main():
     source_tabs = st.tabs(["全部"] + selected_sources)
 
     with source_tabs[0]:
-        render_articles(articles)
+        render_articles(articles, key_prefix="all")
 
     for i, source in enumerate(selected_sources):
         with source_tabs[i + 1]:
-            render_articles([a for a in articles if a["source"] == source])
+            render_articles([a for a in articles if a["source"] == source], key_prefix=source)
 
 
 if __name__ == "__main__":
