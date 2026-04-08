@@ -15,9 +15,9 @@ load_dotenv()
 CACHE_FILE = os.path.join(os.path.abspath(os.path.dirname(__file__)), "news_cache.json")
 
 
-def save_cache(cache: dict):
-    """Save cache to disk, converting datetime to ISO string."""
-    serializable = {}
+def save_cache(cache: dict, timestamps: dict):
+    """Save cache and per-source fetch timestamps to disk."""
+    serializable = {"_timestamps": timestamps}
     for source, articles in cache.items():
         serializable[source] = [
             {**a, "date": a["date"].isoformat()} for a in articles
@@ -26,28 +26,43 @@ def save_cache(cache: dict):
         json.dump(serializable, f, ensure_ascii=False, indent=2)
 
 
-def load_cache() -> tuple[dict, str]:
-    """Load cache from disk. Returns (cache_dict, status_message)."""
+def load_cache() -> tuple[dict, dict, str]:
+    """Load cache from disk. Returns (cache_dict, timestamps_dict, status_message)."""
     if not os.path.exists(CACHE_FILE):
-        return {}, f"快取檔案不存在（{CACHE_FILE}）"
+        return {}, {}, f"快取檔案不存在（{CACHE_FILE}）"
     try:
         with open(CACHE_FILE, "r", encoding="utf-8") as f:
             raw = json.load(f)
+        timestamps = raw.pop("_timestamps", {})
         cache = {}
         for source, articles in raw.items():
             cache[source] = [
                 {**a, "date": datetime.fromisoformat(a["date"])} for a in articles
             ]
         total = sum(len(v) for v in cache.values())
-        return cache, f"從快取讀取 {len(cache)} 個來源，共 {total} 篇"
+        return cache, timestamps, f"從快取讀取 {len(cache)} 個來源，共 {total} 篇"
     except Exception as e:
-        return {}, f"快取讀取失敗：{e}"
+        return {}, {}, f"快取讀取失敗：{e}"
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 SUMMARY_BATCH_SIZE = 20
+CACHE_MAX_AGE_HOURS = 24
+PAGE_SIZE = 20
+
+SOURCE_ICONS = {
+    "micromobility.io": "🛴",
+    "Electrek E-bikes": "⚡",
+    "Zag Daily": "📰",
+    "Bikerumor": "🚵",
+    "Electric Bike Review": "🔋",
+    "Electric Bike Report": "📊",
+    "BikeRadar": "🎯",
+    "Bike-EU Germany": "🇩🇪",
+    "Bike-EU Netherlands": "🇳🇱",
+}
 
 SOURCES = {
     "micromobility.io": "https://micromobility.io/news",
@@ -403,6 +418,10 @@ def scrape_bikeradar(days: int = 7) -> list:
             article_ids = val["nodes"]
             break
 
+    if not article_ids:
+        st.warning("[BikeRadar] 找不到文章列表，Purple 平台 JSON 結構可能已更新。")
+        return articles
+
     for aid in article_ids:
         article = content_cache.get(aid)
         if not article:
@@ -485,6 +504,7 @@ def scrape_bikeeu(url: str, source_name: str, days: int = 7) -> list:
 
 # ─── Article text fetcher ─────────────────────────────────────────────────────
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_article_text(url: str) -> str:
     try:
         resp = requests.get(url, timeout=15, headers=HEADERS)
@@ -512,6 +532,7 @@ def fetch_article_text(url: str) -> str:
         return ""
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_article_text_full(url: str) -> str:
     """Same as fetch_article_text but with a higher character limit for full reading."""
     try:
@@ -625,9 +646,9 @@ def _call_claude_batch(client, batch: list, texts: dict) -> None:
         i += 2
 
 
-def generate_summaries(articles: list, existing_by_url: dict | None = None) -> list:
-    # Restore existing summaries first to avoid unnecessary API calls
-    if existing_by_url:
+def generate_summaries(articles: list, existing_by_url: dict | None = None, force: bool = False) -> list:
+    # Restore existing summaries first to avoid unnecessary API calls (skip if force regenerate)
+    if existing_by_url and not force:
         for a in articles:
             cached = existing_by_url.get(a["url"])
             if cached and cached.get("summary_en"):
@@ -677,27 +698,64 @@ SCRAPER_MAP = {
 }
 
 
-def render_articles(articles: list, key_prefix: str = ""):
+def render_articles(articles: list, key_prefix: str = "", sort_asc: bool = False,
+                    search_query: str = "", hide_read: bool = False):
+    read_urls: set = st.session_state.setdefault("read_urls", set())
+
+    # Search filter
+    if search_query:
+        q = search_query.lower()
+        articles = [
+            a for a in articles
+            if q in a["title"].lower()
+            or q in a.get("summary_en", "").lower()
+            or q in a.get("summary_zh", "").lower()
+        ]
+
+    # Hide read filter
+    if hide_read:
+        articles = [a for a in articles if a["url"] not in read_urls]
+
     if not articles:
-        st.info("此分類沒有文章。")
+        st.info("沒有符合條件的文章。")
         return
 
+    # Sort
+    articles_sorted = sorted(articles, key=lambda x: x["date"], reverse=not sort_asc)
+    total = len(articles_sorted)
+
+    # Pagination
+    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+    page_key = f"page_{key_prefix}"
+    current_page = min(max(st.session_state.get(page_key, 1), 1), total_pages)
+    page_articles = articles_sorted[(current_page - 1) * PAGE_SIZE: current_page * PAGE_SIZE]
+
+    # Group by category
     grouped: dict[str, list] = {}
-    for a in articles:
+    for a in page_articles:
         grouped.setdefault(a["category"], []).append(a)
 
     for cat, items in grouped.items():
-        items_sorted = sorted(items, key=lambda x: x["date"], reverse=True)
-        st.subheader(f"{cat}　`{len(items_sorted)} 篇`")
+        st.subheader(f"{cat}　`{len(items)} 篇`")
 
-        for item in items_sorted:
+        for item in items:
+            is_read = item["url"] in read_urls
             with st.container(border=True):
                 title_col, meta_col = st.columns([6, 1])
                 with title_col:
-                    st.markdown(f"**{item['title']}**")
+                    icon = SOURCE_ICONS.get(item["source"], "📄")
+                    title_text = f"~~{item['title']}~~" if is_read else f"**{item['title']}**"
+                    st.markdown(f"{icon} {title_text}")
                 with meta_col:
                     st.caption(item["date"].strftime("%Y-%m-%d"))
-                    st.caption(f"🔗 {item['source']}")
+                    st.caption(item["source"])
+                    read_btn_label = "✓ 已讀" if is_read else "標記已讀"
+                    if st.button(read_btn_label, key=f"read_{key_prefix}_{item['url']}"):
+                        if is_read:
+                            read_urls.discard(item["url"])
+                        else:
+                            read_urls.add(item["url"])
+                        st.rerun()
 
                 en_col, zh_col = st.columns(2)
                 with en_col:
@@ -723,15 +781,33 @@ def render_articles(articles: list, key_prefix: str = ""):
                         with st.spinner("正在抓取並翻譯全文..."):
                             st.session_state[cache_key] = fetch_and_translate(item["url"], item["title"])
                     en_text, zh_text = st.session_state[cache_key]
-                    col_en, col_zh = st.columns(2)
-                    with col_en:
-                        st.caption("🇺🇸 English")
-                        st.markdown(en_text)
-                    with col_zh:
-                        st.caption("🇹🇼 繁體中文")
-                        st.markdown(zh_text)
+                    if en_text.startswith("(無法取得全文)"):
+                        st.warning("此文章無法擷取全文（可能有付費牆或 JS 渲染），請直接點原文連結閱讀。")
+                    else:
+                        col_en, col_zh = st.columns(2)
+                        with col_en:
+                            st.caption("🇺🇸 English")
+                            st.markdown(en_text)
+                        with col_zh:
+                            st.caption("🇹🇼 繁體中文")
+                            st.markdown(zh_text)
 
         st.write("")
+
+    # Pagination controls
+    if total_pages > 1:
+        st.divider()
+        col_prev, col_info, col_next = st.columns([1, 3, 1])
+        with col_prev:
+            if st.button("← 上一頁", key=f"prev_{key_prefix}", disabled=current_page <= 1):
+                st.session_state[page_key] = current_page - 1
+                st.rerun()
+        with col_info:
+            st.markdown(f"<div style='text-align:center'>第 {current_page} / {total_pages} 頁　共 {total} 篇</div>", unsafe_allow_html=True)
+        with col_next:
+            if st.button("下一頁 →", key=f"next_{key_prefix}", disabled=current_page >= total_pages):
+                st.session_state[page_key] = current_page + 1
+                st.rerun()
 
 
 def main():
@@ -748,23 +824,39 @@ def main():
     # Sidebar
     with st.sidebar:
         st.header("⚙️ 設定")
-        days = st.slider("抓取天數", min_value=1, max_value=14, value=7, step=1)
+
+        # Search
+        search_query = st.text_input("🔍 搜尋關鍵字", placeholder="標題或摘要關鍵字...")
         st.divider()
-        selected_free = st.multiselect(
-            "新聞來源",
-            options=FREE_SOURCES,
-            default=FREE_SOURCES,
-        )
+
+        # Days & sort
+        days = st.slider("抓取天數", min_value=1, max_value=14, value=7, step=1)
+        sort_order = st.radio("排序", ["最新優先", "最舊優先"], horizontal=True)
+        sort_asc = sort_order == "最舊優先"
+        st.divider()
+
+        # Sources & categories
+        selected_free = st.multiselect("新聞來源", options=FREE_SOURCES, default=FREE_SOURCES)
         st.divider()
         all_cats = list(CATEGORIES.keys())
         selected_cats = st.multiselect("文章分類篩選", options=all_cats, default=all_cats)
         st.divider()
+
+        # Read status
+        hide_read = st.checkbox("隱藏已讀文章")
+        if st.button("清除所有已讀記錄"):
+            st.session_state["read_urls"] = set()
+            st.rerun()
+        st.divider()
+
+        # Refresh controls
         sources_to_refresh = st.multiselect(
             "指定重新抓取來源",
-            options=list(SOURCES.keys()),
-            default=list(SOURCES.keys()),
+            options=FREE_SOURCES,
+            default=FREE_SOURCES,
             help="只勾選的來源會重新抓取，其他保留快取",
         )
+        force_regen = st.checkbox("強制重新生成摘要", help="重新抓取時忽略已有摘要，以新 prompt 重新生成")
         refresh = st.button("🔄 重新抓取 & 更新", use_container_width=True)
         if "cache_status" in st.session_state:
             st.caption(st.session_state["cache_status"])
@@ -773,14 +865,16 @@ def main():
 
     # Fetch data — persistent disk cache, only re-fetch selected sources
     if "article_cache" not in st.session_state:
-        loaded, status_msg = load_cache()
+        loaded, timestamps, status_msg = load_cache()
         st.session_state["article_cache"] = loaded
+        st.session_state["cache_timestamps"] = timestamps
         st.session_state["cache_status"] = status_msg
 
     cache = st.session_state["article_cache"]
+    timestamps: dict = st.session_state.setdefault("cache_timestamps", {})
 
     if not cache:
-        to_refresh = list(SOURCES.keys())
+        to_refresh = FREE_SOURCES
     elif refresh:
         to_refresh = sources_to_refresh
     else:
@@ -792,15 +886,26 @@ def main():
                 arts = SCRAPER_MAP[source](days)
                 if arts:
                     existing_by_url = {a["url"]: a for a in cache.get(source, [])}
-                    cache[source] = generate_summaries(arts, existing_by_url)
+                    cache[source] = generate_summaries(arts, existing_by_url, force=force_regen)
+                    timestamps[source] = datetime.now().isoformat()
 
         st.session_state["article_cache"] = cache
-        save_cache(cache)
+        st.session_state["cache_timestamps"] = timestamps
+        save_cache(cache, timestamps)
         st.session_state["fetched_at"] = datetime.now()
     elif "fetched_at" not in st.session_state and cache:
         st.session_state["fetched_at"] = datetime.fromtimestamp(
             os.path.getmtime(CACHE_FILE)
         ) if os.path.exists(CACHE_FILE) else datetime.now()
+
+    # Staleness warning
+    now = datetime.now()
+    stale_sources = [
+        s for s, ts in timestamps.items()
+        if (now - datetime.fromisoformat(ts)).total_seconds() > CACHE_MAX_AGE_HOURS * 3600
+    ]
+    if stale_sources:
+        st.warning(f"⚠️ 以下來源資料超過 {CACHE_MAX_AGE_HOURS} 小時未更新：{', '.join(stale_sources)}。建議重新抓取。")
 
     all_articles = [a for arts in cache.values() for a in arts]
 
@@ -826,14 +931,18 @@ def main():
     st.divider()
 
     # Tabs by source
-    source_tabs = st.tabs(["全部"] + selected_sources)
+    tab_labels = ["全部"] + [f"{SOURCE_ICONS.get(s, '')} {s}" for s in selected_sources]
+    source_tabs = st.tabs(tab_labels)
 
     with source_tabs[0]:
-        render_articles(articles, key_prefix="all")
+        render_articles(articles, key_prefix="all", sort_asc=sort_asc,
+                        search_query=search_query, hide_read=hide_read)
 
     for i, source in enumerate(selected_sources):
         with source_tabs[i + 1]:
-            render_articles([a for a in articles if a["source"] == source], key_prefix=source)
+            render_articles([a for a in articles if a["source"] == source],
+                            key_prefix=source, sort_asc=sort_asc,
+                            search_query=search_query, hide_read=hide_read)
 
 
 if __name__ == "__main__":
