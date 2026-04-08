@@ -55,6 +55,7 @@ SOURCES = {
     "Zag Daily": "https://zagdaily.com/feed/",
     "Bikerumor": "https://bikerumor.com/bike-types/e-bike-2/feed/",
     "Electric Bike Review": "https://electricbikereview.com/feed/",
+    "Electric Bike Report": "https://electricbikereport.com/electric-bike-news/",
     "BikeRadar": "https://www.bikeradar.com/electric-bikes",
     "Bike-EU Germany": "https://www.bike-eu.com/germany",
     "Bike-EU Netherlands": "https://www.bike-eu.com/the-netherlands",
@@ -360,6 +361,70 @@ def scrape_electricbikereview(days: int = 7) -> list:
     return articles
 
 
+def scrape_electricbikereport(days: int = 7) -> list:
+    """electricbikereport.com — WordPress listing, date as text sibling after <a>."""
+    base_url = "https://electricbikereport.com/electric-bike-news/"
+    cutoff = datetime.now() - timedelta(days=days)
+    articles = []
+    seen: set[str] = set()
+    page = 1
+
+    while True:
+        url = base_url if page == 1 else f"{base_url}page/{page}/"
+        try:
+            resp = requests.get(url, timeout=15, headers=HEADERS)
+            resp.raise_for_status()
+        except Exception as e:
+            st.error(f"[Electric Bike Report] 抓取失敗：{e}")
+            break
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Each card is an <a href="..."> containing an <h2>
+        cards = [a for a in soup.find_all("a", href=True) if a.find("h2")]
+        if not cards:
+            break
+
+        stop = False
+        found = False
+        for a in cards:
+            href = a.get("href", "")
+            if not href or href in seen:
+                continue
+            seen.add(href)
+
+            title = a.find("h2").get_text(strip=True)
+            if not title:
+                continue
+
+            # Date is a plain text node immediately after the </a>
+            date_obj = None
+            for sibling in a.next_siblings:
+                text = sibling.strip() if isinstance(sibling, str) else sibling.get_text(strip=True)
+                if text:
+                    date_obj = parse_date(text)
+                    if date_obj:
+                        break
+
+            if not date_obj:
+                continue
+            if date_obj < cutoff:
+                stop = True
+                break
+
+            articles.append(make_article(title, date_obj, href, "Electric Bike Report"))
+            found = True
+
+        if stop or not found:
+            break
+        # Check for next page link
+        if not soup.find("a", string=re.compile(r"Next|»|older", re.I)):
+            break
+        page += 1
+
+    return articles
+
+
 def scrape_bikeradar(days: int = 7) -> list:
     """bikeradar.com/electric-bikes — Purple SPA with embedded JSON state."""
     base = "https://www.bikeradar.com"
@@ -604,6 +669,7 @@ SCRAPER_MAP = {
     "Bikerumor": lambda days: scrape_rss("https://bikerumor.com/bike-types/e-bike-2/feed/", "Bikerumor", days,
                                          extra_headers={"User-Agent": "FeedFetcher-Google; (+http://www.google.com/feedfetcher.html)"}),
     "Electric Bike Review": scrape_electricbikereview,
+    "Electric Bike Report": scrape_electricbikereport,
     "BikeRadar": scrape_bikeradar,
     "Bike-EU Germany": lambda days: scrape_bikeeu("https://www.bike-eu.com/germany", "Bike-EU Germany", days),
     "Bike-EU Netherlands": lambda days: scrape_bikeeu("https://www.bike-eu.com/the-netherlands", "Bike-EU Netherlands", days),
@@ -653,7 +719,7 @@ def main():
     )
     st.title("🛴 Micromobility News Dashboard")
 
-    FREE_SOURCES  = ["micromobility.io", "Electrek E-bikes", "Zag Daily", "Bikerumor", "Electric Bike Review", "BikeRadar"]
+    FREE_SOURCES  = ["micromobility.io", "Electrek E-bikes", "Zag Daily", "Bikerumor", "Electric Bike Review", "Electric Bike Report", "BikeRadar"]
     PAID_SOURCES  = ["Bike-EU Germany", "Bike-EU Netherlands"]
 
     # Sidebar
