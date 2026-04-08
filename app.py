@@ -835,11 +835,8 @@ def main():
         sort_asc = sort_order == "最舊優先"
         st.divider()
 
-        # Sources & categories
+        # Sources
         selected_free = st.multiselect("新聞來源", options=FREE_SOURCES, default=FREE_SOURCES)
-        st.divider()
-        all_cats = list(CATEGORIES.keys())
-        selected_cats = st.multiselect("文章分類篩選", options=all_cats, default=all_cats)
         st.divider()
 
         # Read status
@@ -915,20 +912,32 @@ def main():
 
     fetched_at = st.session_state.get("fetched_at")
 
-    # Filter
-    articles = [
-        a for a in all_articles
-        if a["source"] in selected_sources and a["category"] in selected_cats
-    ]
+    # Filter by source
+    articles_by_source = [a for a in all_articles if a["source"] in selected_sources]
 
-    # Stats
+    # Stats (based on source filter only, before category filter)
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("文章總數", len(articles))
-    col2.metric("涵蓋分類", len({a["category"] for a in articles}))
-    col3.metric("最新文章", articles[0]["date"].strftime("%m/%d") if articles else "—")
+    col1.metric("文章總數", len(articles_by_source))
+    col2.metric("涵蓋分類", len({a["category"] for a in articles_by_source}))
+    col3.metric("最新文章", articles_by_source[0]["date"].strftime("%m/%d") if articles_by_source else "—")
     col4.metric("資料更新時間", fetched_at.strftime("%H:%M") if fetched_at else "—")
 
+    # Category pills — always visible below stats
+    all_cats = list(CATEGORIES.keys())
+    selected_cats = st.pills(
+        "分類篩選",
+        options=all_cats,
+        selection_mode="multi",
+        default=all_cats,
+        label_visibility="collapsed",
+    )
+    if not selected_cats:
+        selected_cats = all_cats  # 全不選 = 全選
+
     st.divider()
+
+    # Final filter
+    articles = [a for a in articles_by_source if a["category"] in selected_cats]
 
     # Tabs by source
     tab_labels = ["全部"] + [f"{SOURCE_ICONS.get(s, '')} {s}" for s in selected_sources]
