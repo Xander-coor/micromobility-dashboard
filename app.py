@@ -700,12 +700,21 @@ def render_articles(articles: list):
                     st.caption("🇹🇼 中文摘要")
                     st.write(item["summary_zh"] or "—")
 
-                with st.expander("📖 展開閱讀中英對照全文"):
-                    cache_key = f"fulltext_{item['url']}"
+                cache_key = f"fulltext_{item['url']}"
+                show_key = f"show_{item['url']}"
+                is_open = st.session_state.get(show_key, False)
+                btn_label = "🔼 收起全文" if is_open else "📖 展開中英對照全文"
+                col_link, col_btn = st.columns([4, 1])
+                with col_link:
+                    st.markdown(f"[原文連結 →]({item['url']})")
+                with col_btn:
+                    if st.button(btn_label, key=f"btn_{item['url']}"):
+                        st.session_state[show_key] = not is_open
+
+                if st.session_state.get(show_key, False):
                     if cache_key not in st.session_state:
                         with st.spinner("正在抓取並翻譯全文..."):
-                            en_text, zh_text = fetch_and_translate(item["url"], item["title"])
-                            st.session_state[cache_key] = (en_text, zh_text)
+                            st.session_state[cache_key] = fetch_and_translate(item["url"], item["title"])
                     en_text, zh_text = st.session_state[cache_key]
                     col_en, col_zh = st.columns(2)
                     with col_en:
@@ -714,8 +723,6 @@ def render_articles(articles: list):
                     with col_zh:
                         st.caption("🇹🇼 繁體中文")
                         st.markdown(zh_text)
-
-                st.markdown(f"[原文連結 →]({item['url']})")
 
         st.write("")
 
