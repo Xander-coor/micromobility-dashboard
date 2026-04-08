@@ -46,6 +46,8 @@ def load_cache() -> tuple[dict, str]:
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+CLAUDE_MODEL = "claude-haiku-4-5-20251001"
+SUMMARY_BATCH_SIZE = 20
 
 SOURCES = {
     "micromobility.io": "https://micromobility.io/news",
@@ -53,6 +55,7 @@ SOURCES = {
     "Zag Daily": "https://zagdaily.com/feed/",
     "Bikerumor": "https://bikerumor.com/bike-types/e-bike-2/feed/",
     "Electric Bike Review": "https://electricbikereview.com/feed/",
+    "BikeRadar": "https://www.bikeradar.com/electric-bikes",
     "Bike-EU Germany": "https://www.bike-eu.com/germany",
     "Bike-EU Netherlands": "https://www.bike-eu.com/the-netherlands",
 }
@@ -298,11 +301,13 @@ def scrape_zagdaily(days: int = 7) -> list:
 
 
 def scrape_electricbikereview(days: int = 7) -> list:
-    """electricbikereview.com — no date filter, scrape all reviews + RSS news."""
+    """electricbikereview.com — main page reviews + RSS news."""
     articles = []
     today = datetime.now()
+    cutoff = today - timedelta(days=days)
+    seen_urls: set[str] = set()
 
-    # Part 1: main page reviews
+    # Part 1: main page reviews (dates unavailable, use today as placeholder)
     try:
         resp = requests.get("https://electricbikereview.com/", timeout=15, headers=HEADERS)
         resp.raise_for_status()
@@ -316,12 +321,13 @@ def scrape_electricbikereview(days: int = 7) -> list:
                 continue
             title = a.get_text(strip=True)
             url = a.get("href", "")
-            if title and url:
+            if title and url and url not in seen_urls:
+                seen_urls.add(url)
                 articles.append(make_article(title, today, url, "Electric Bike Review"))
     except Exception as e:
         st.error(f"[Electric Bike Review] 主頁抓取失敗：{e}")
 
-    # Part 2: RSS news (no date cutoff)
+    # Part 2: RSS news with date filter
     try:
         rss = requests.get("https://electricbikereview.com/feed/", timeout=15, headers=HEADERS)
         rss.raise_for_status()
@@ -335,19 +341,80 @@ def scrape_electricbikereview(days: int = 7) -> list:
                 continue
             title = title_tag.get_text(strip=True)
             url   = link_tag.get_text(strip=True)
-            # Skip if already in reviews
-            if any(a["url"] == url for a in articles):
+            if url in seen_urls:
                 continue
+            seen_urls.add(url)
             try:
                 date_obj = parsedate_to_datetime(pub_tag.get_text(strip=True)).replace(tzinfo=None) if pub_tag else today
             except Exception:
                 date_obj = today
+            if date_obj < cutoff:
+                break
             plain_text = ""
             if content_tag:
                 plain_text = BeautifulSoup(content_tag.get_text(), "html.parser").get_text(separator="\n", strip=True)[:2000]
             articles.append(make_article(title, date_obj, url, "Electric Bike Review", plain_text))
     except Exception as e:
         st.error(f"[Electric Bike Review] RSS抓取失敗：{e}")
+
+    return articles
+
+
+def scrape_bikeradar(days: int = 7) -> list:
+    """bikeradar.com/electric-bikes — Purple SPA with embedded JSON state."""
+    base = "https://www.bikeradar.com"
+    cutoff = datetime.now() - timedelta(days=days)
+    articles = []
+
+    try:
+        resp = requests.get(f"{base}/electric-bikes", timeout=20, headers=HEADERS)
+        resp.raise_for_status()
+    except Exception as e:
+        st.error(f"[BikeRadar] 抓取失敗：{e}")
+        return articles
+
+    # Article data is embedded in a <script> block as JSON (Purple platform)
+    data = None
+    for script_text in re.findall(r"<script[^>]*>(.*?)</script>", resp.text, re.DOTALL):
+        if "PURPLE_CONTENT_CACHE" in script_text and "PURPLE_API_CACHE" in script_text:
+            try:
+                data = json.loads(script_text)
+                break
+            except Exception:
+                continue
+
+    if not data:
+        st.error("[BikeRadar] 無法解析頁面資料（JSON 結構可能已變更）")
+        return articles
+
+    content_cache = data.get("PURPLE_CONTENT_CACHE", {})
+    api_cache = data.get("PURPLE_API_CACHE", {})
+
+    # Find the feed key that holds ordered article UUIDs
+    article_ids = []
+    for key, val in api_cache.items():
+        if "getContents" in key and val.get("nodes"):
+            article_ids = val["nodes"]
+            break
+
+    for aid in article_ids:
+        article = content_cache.get(aid)
+        if not article:
+            continue
+
+        title = article.get("name", "").strip()
+        slug = article.get("properties", {}).get("slug", "")
+        pub_ms = article.get("publicationDate", 0)
+
+        if not title or not slug or not pub_ms:
+            continue
+
+        date_obj = datetime.fromtimestamp(pub_ms / 1000)
+        if date_obj < cutoff:
+            continue
+
+        description = article.get("description", "")
+        articles.append(make_article(title, date_obj, f"{base}/{slug}", "BikeRadar", description))
 
     return articles
 
@@ -459,7 +526,52 @@ def fetch_all_texts_parallel(articles: list, max_workers: int = 6) -> dict:
 
 # ─── Claude API ───────────────────────────────────────────────────────────────
 
-def generate_summaries(articles: list) -> list:
+def _call_claude_batch(client, batch: list, texts: dict) -> None:
+    """Send one batch of articles to Claude and fill in summary_en / summary_zh in-place."""
+    article_blocks = [
+        f"<<<ARTICLE_{i+1}>>>\n標題：{a['title']}\n內容：{texts.get(a['url'], '') or '(無法取得內容)'}"
+        for i, a in enumerate(batch)
+    ]
+    prompt = (
+        "請為以下每篇文章各生成一組英文摘要和繁體中文摘要（各2–3句）。\n\n"
+        "輸出格式嚴格如下，每篇之間空一行，分隔符必須完整保留：\n"
+        "<<<ARTICLE_1>>>\nEN: <英文摘要>\nZH: <繁體中文摘要>\n\n"
+        "<<<ARTICLE_2>>>\nEN: <英文摘要>\nZH: <繁體中文摘要>\n\n"
+        "（只輸出分隔符和摘要，不要其他說明文字）\n\n"
+        "文章列表：\n\n" + "\n\n".join(article_blocks)
+    )
+    resp = client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=350 * len(batch),
+        messages=[{"role": "user", "content": prompt}],
+    )
+    result = resp.content[0].text.strip()
+    blocks = re.split(r"<<<ARTICLE_(\d+)>>>", result)
+    i = 1
+    while i < len(blocks) - 1:
+        idx = int(blocks[i]) - 1
+        content = blocks[i + 1]
+        en_m = re.search(r"EN:\s*(.+)", content)
+        zh_m = re.search(r"ZH:\s*(.+)", content)
+        if 0 <= idx < len(batch):
+            batch[idx]["summary_en"] = en_m.group(1).strip() if en_m else ""
+            batch[idx]["summary_zh"] = zh_m.group(1).strip() if zh_m else ""
+        i += 2
+
+
+def generate_summaries(articles: list, existing_by_url: dict | None = None) -> list:
+    # Restore existing summaries first to avoid unnecessary API calls
+    if existing_by_url:
+        for a in articles:
+            cached = existing_by_url.get(a["url"])
+            if cached and cached.get("summary_en"):
+                a["summary_en"] = cached["summary_en"]
+                a["summary_zh"] = cached["summary_zh"]
+
+    to_summarize = [a for a in articles if not a.get("summary_en")]
+    if not to_summarize:
+        return articles
+
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         st.warning("未設定 ANTHROPIC_API_KEY，跳過摘要生成。")
@@ -467,45 +579,18 @@ def generate_summaries(articles: list) -> list:
 
     client = anthropic.Anthropic(api_key=api_key)
 
-    with st.spinner(f"同時抓取 {len(articles)} 篇文章內容..."):
-        texts = fetch_all_texts_parallel(articles)
+    with st.spinner(f"同時抓取 {len(to_summarize)} 篇新文章內容..."):
+        texts = fetch_all_texts_parallel(to_summarize)
 
-    article_blocks = [
-        f"<<<ARTICLE_{i+1}>>>\n標題：{a['title']}\n內容：{texts.get(a['url'], '') or '(無法取得內容)'}"
-        for i, a in enumerate(articles)
-    ]
-
-    batch_prompt = (
-        "請為以下每篇文章各生成一組英文摘要和繁體中文摘要（各2–3句）。\n\n"
-        "輸出格式嚴格如下，每篇之間空一行，分隔符必須完整保留：\n"
-        "<<<ARTICLE_1>>>\nEN: <英文摘要>\nZH: <繁體中文摘要>\n\n"
-        "<<<ARTICLE_2>>>\nEN: <英文摘要>\nZH: <繁體中文摘要>\n\n"
-        "（只輸出分隔符和摘要，不要其他說明文字）\n\n"
-        "文章列表：\n\n"
-        + "\n\n".join(article_blocks)
-    )
-
-    with st.spinner("Claude 生成摘要中（批次處理）..."):
-        try:
-            resp = client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=350 * len(articles),
-                messages=[{"role": "user", "content": batch_prompt}],
-            )
-            result = resp.content[0].text.strip()
-            blocks = re.split(r"<<<ARTICLE_(\d+)>>>", result)
-            i = 1
-            while i < len(blocks) - 1:
-                idx = int(blocks[i]) - 1
-                content = blocks[i + 1]
-                en_m = re.search(r"EN:\s*(.+)", content)
-                zh_m = re.search(r"ZH:\s*(.+)", content)
-                if 0 <= idx < len(articles):
-                    articles[idx]["summary_en"] = en_m.group(1).strip() if en_m else ""
-                    articles[idx]["summary_zh"] = zh_m.group(1).strip() if zh_m else ""
-                i += 2
-        except Exception as e:
-            st.warning(f"批次摘要生成失敗：{e}")
+    total_batches = (len(to_summarize) + SUMMARY_BATCH_SIZE - 1) // SUMMARY_BATCH_SIZE
+    for batch_idx in range(total_batches):
+        batch = to_summarize[batch_idx * SUMMARY_BATCH_SIZE:(batch_idx + 1) * SUMMARY_BATCH_SIZE]
+        label = f"Claude 生成摘要中（第 {batch_idx + 1}/{total_batches} 批）..." if total_batches > 1 else "Claude 生成摘要中..."
+        with st.spinner(label):
+            try:
+                _call_claude_batch(client, batch, texts)
+            except Exception as e:
+                st.warning(f"第 {batch_idx + 1} 批摘要生成失敗：{e}")
 
     return articles
 
@@ -519,6 +604,7 @@ SCRAPER_MAP = {
     "Bikerumor": lambda days: scrape_rss("https://bikerumor.com/bike-types/e-bike-2/feed/", "Bikerumor", days,
                                          extra_headers={"User-Agent": "FeedFetcher-Google; (+http://www.google.com/feedfetcher.html)"}),
     "Electric Bike Review": scrape_electricbikereview,
+    "BikeRadar": scrape_bikeradar,
     "Bike-EU Germany": lambda days: scrape_bikeeu("https://www.bike-eu.com/germany", "Bike-EU Germany", days),
     "Bike-EU Netherlands": lambda days: scrape_bikeeu("https://www.bike-eu.com/the-netherlands", "Bike-EU Netherlands", days),
 }
@@ -567,7 +653,7 @@ def main():
     )
     st.title("🛴 Micromobility News Dashboard")
 
-    FREE_SOURCES  = ["micromobility.io", "Electrek E-bikes", "Zag Daily", "Bikerumor", "Electric Bike Review"]
+    FREE_SOURCES  = ["micromobility.io", "Electrek E-bikes", "Zag Daily", "Bikerumor", "Electric Bike Review", "BikeRadar"]
     PAID_SOURCES  = ["Bike-EU Germany", "Bike-EU Netherlands"]
 
     # Sidebar
@@ -622,7 +708,8 @@ def main():
             with st.spinner(f"抓取 {source}..."):
                 arts = SCRAPER_MAP[source](days)
                 if arts:
-                    cache[source] = generate_summaries(arts)
+                    existing_by_url = {a["url"]: a for a in cache.get(source, [])}
+                    cache[source] = generate_summaries(arts, existing_by_url)
 
         st.session_state["article_cache"] = cache
         save_cache(cache)
@@ -632,14 +719,12 @@ def main():
             os.path.getmtime(CACHE_FILE)
         ) if os.path.exists(CACHE_FILE) else datetime.now()
 
-    all_arts = [a for arts in cache.values() for a in arts]
+    all_articles = [a for arts in cache.values() for a in arts]
 
-    if not all_arts:
+    if not all_articles:
         st.warning("未找到符合條件的文章。")
         return
 
-
-    all_articles = all_arts
     fetched_at = st.session_state.get("fetched_at")
 
     # Filter
