@@ -830,7 +830,7 @@ def main():
         st.divider()
 
         # Days & sort
-        days = st.slider("抓取天數", min_value=1, max_value=14, value=7, step=1)
+        days = st.slider("抓取天數", min_value=1, max_value=30, value=7, step=1)
         sort_order = st.radio("排序", ["最新優先", "最舊優先"], horizontal=True)
         sort_asc = sort_order == "最舊優先"
         st.divider()
