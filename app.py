@@ -52,6 +52,26 @@ SUMMARY_BATCH_SIZE = 20
 CACHE_MAX_AGE_HOURS = 24
 PAGE_SIZE = 20
 
+CAT_DISPLAY = {
+    "共享微移動 Shared Mobility":       "共享微移動",
+    "電動自行車 E-bikes":               "電動自行車",
+    "Media Review":                     "媒體評論",
+    "商業與投資 Business & Investment":  "商業與投資",
+    "政策與法規 Policy & Regulation":    "政策與法規",
+    "技術與產品 Tech & Product":         "技術與產品",
+    "產業動態 Industry News":           "產業動態",
+}
+
+CAT_COLORS = {
+    "共享微移動 Shared Mobility":       "#3B82F6",
+    "電動自行車 E-bikes":               "#22C55E",
+    "Media Review":                     "#F97316",
+    "商業與投資 Business & Investment":  "#A855F7",
+    "政策與法規 Policy & Regulation":    "#EF4444",
+    "技術與產品 Tech & Product":         "#14B8A6",
+    "產業動態 Industry News":           "#6B7280",
+}
+
 SOURCE_ICONS = {
     "micromobility.io": "🛴",
     "Electrek E-bikes": "⚡",
@@ -922,17 +942,64 @@ def main():
     col3.metric("最新文章", articles_by_source[0]["date"].strftime("%m/%d") if articles_by_source else "—")
     col4.metric("資料更新時間", fetched_at.strftime("%H:%M") if fetched_at else "—")
 
-    # Category pills — always visible below stats
+    # ─── Category filter buttons ──────────────────────────────────────────────
     all_cats = list(CATEGORIES.keys())
-    selected_cats = st.pills(
-        "分類篩選",
-        options=all_cats,
-        selection_mode="multi",
-        default=all_cats,
-        label_visibility="collapsed",
+    if "selected_cats_set" not in st.session_state:
+        st.session_state["selected_cats_set"] = set(all_cats)
+    sel: set = st.session_state["selected_cats_set"]
+
+    # Build CSS: scoped to buttons after .cat-filter-anchor marker
+    _r1 = ".element-container:has(.cat-filter-anchor) + [data-testid='stHorizontalBlock']"
+    _r2 = _r1 + " + [data-testid='stHorizontalBlock']"
+
+    def _btn_css(row, col_n, color):
+        c = f"{row} [data-testid='column']:nth-child({col_n})"
+        return (
+            f"{c} [data-testid='baseButton-secondary']"
+            f"{{border:2px solid {color}!important;color:{color}!important;background:transparent!important;}}"
+            f"{c} [data-testid='baseButton-primary']"
+            f"{{background:{color}!important;border:2px solid {color}!important;color:white!important;}}"
+        )
+
+    _base = (
+        f"{_r1} [data-testid='baseButton-secondary'],{_r1} [data-testid='baseButton-primary'],"
+        f"{_r2} [data-testid='baseButton-secondary'],{_r2} [data-testid='baseButton-primary']"
     )
-    if not selected_cats:
-        selected_cats = all_cats  # 全不選 = 全選
+    _color_rules = "".join(
+        [_btn_css(_r1, i + 1, CAT_COLORS[c]) for i, c in enumerate(all_cats[:5])] +
+        [_btn_css(_r2, i + 1, CAT_COLORS[c]) for i, c in enumerate(all_cats[5:])]
+    )
+    st.markdown(
+        "<style>"
+        + _base
+        + "{border-radius:12px!important;height:64px!important;"
+        + "font-size:13px!important;font-weight:700!important;width:100%!important;}"
+        + _color_rules
+        + "</style><div class='cat-filter-anchor'></div>",
+        unsafe_allow_html=True,
+    )
+
+    # Row 1 — 5 categories
+    cols1 = st.columns(5)
+    for i, cat in enumerate(all_cats[:5]):
+        with cols1[i]:
+            active = cat in sel
+            if st.button(CAT_DISPLAY[cat], key=f"cat_{cat}",
+                         use_container_width=True, type="primary" if active else "secondary"):
+                sel.discard(cat) if active else sel.add(cat)
+                st.rerun()
+
+    # Row 2 — remaining 2 categories (left-aligned)
+    cols2 = st.columns(5)
+    for i, cat in enumerate(all_cats[5:]):
+        with cols2[i]:
+            active = cat in sel
+            if st.button(CAT_DISPLAY[cat], key=f"cat_{cat}",
+                         use_container_width=True, type="primary" if active else "secondary"):
+                sel.discard(cat) if active else sel.add(cat)
+                st.rerun()
+
+    selected_cats = list(sel) if sel else all_cats
 
     st.divider()
 
