@@ -362,67 +362,8 @@ def scrape_electricbikereview(days: int = 7) -> list:
 
 
 def scrape_electricbikereport(days: int = 7) -> list:
-    """electricbikereport.com — WordPress listing, date as text sibling after <a>."""
-    base_url = "https://electricbikereport.com/electric-bike-news/"
-    cutoff = datetime.now() - timedelta(days=days)
-    articles = []
-    seen: set[str] = set()
-    page = 1
-
-    while True:
-        url = base_url if page == 1 else f"{base_url}page/{page}/"
-        try:
-            resp = requests.get(url, timeout=15, headers=HEADERS)
-            resp.raise_for_status()
-        except Exception as e:
-            st.error(f"[Electric Bike Report] 抓取失敗：{e}")
-            break
-
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        # Each card is an <a href="..."> containing an <h2>
-        cards = [a for a in soup.find_all("a", href=True) if a.find("h2")]
-        if not cards:
-            break
-
-        stop = False
-        found = False
-        for a in cards:
-            href = a.get("href", "")
-            if not href or href in seen:
-                continue
-            seen.add(href)
-
-            title = a.find("h2").get_text(strip=True)
-            if not title:
-                continue
-
-            # Date is a plain text node immediately after the </a>
-            date_obj = None
-            for sibling in a.next_siblings:
-                text = sibling.strip() if isinstance(sibling, str) else sibling.get_text(strip=True)
-                if text:
-                    date_obj = parse_date(text)
-                    if date_obj:
-                        break
-
-            if not date_obj:
-                continue
-            if date_obj < cutoff:
-                stop = True
-                break
-
-            articles.append(make_article(title, date_obj, href, "Electric Bike Report"))
-            found = True
-
-        if stop or not found:
-            break
-        # Check for next page link
-        if not soup.find("a", string=re.compile(r"Next|»|older", re.I)):
-            break
-        page += 1
-
-    return articles
+    """electricbikereport.com — WordPress RSS feed."""
+    return scrape_rss("https://electricbikereport.com/feed/", "Electric Bike Report", days)
 
 
 def scrape_bikeradar(days: int = 7) -> list:
