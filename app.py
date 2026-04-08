@@ -512,6 +512,59 @@ def fetch_article_text(url: str) -> str:
         return ""
 
 
+def fetch_article_text_full(url: str) -> str:
+    """Same as fetch_article_text but with a higher character limit for full reading."""
+    try:
+        resp = requests.get(url, timeout=15, headers=HEADERS)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        for tag in soup.find_all(["nav", "footer", "aside", "script", "style", "figure"]):
+            tag.decompose()
+
+        for selector in [".post-content", ".entry-content", ".article-content",
+                         ".article__content", ".post__content", "article > div", "article"]:
+            body = soup.select_one(selector)
+            if body:
+                paras = [p.get_text(strip=True) for p in body.find_all("p") if len(p.get_text(strip=True)) > 30]
+                text = "\n\n".join(paras)
+                if len(text) > 100:
+                    return text[:6000]
+
+        paragraphs = [p.get_text(strip=True) for p in soup.find_all("p") if len(p.get_text(strip=True)) > 40]
+        return "\n\n".join(paragraphs)[:6000]
+    except Exception:
+        return ""
+
+
+def fetch_and_translate(url: str, title: str) -> tuple[str, str]:
+    """Fetch full article and return (english_text, chinese_translation)."""
+    en_text = fetch_article_text_full(url)
+    if not en_text:
+        return "(無法取得全文)", ""
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return en_text, "(未設定 ANTHROPIC_API_KEY)"
+
+    client = anthropic.Anthropic(api_key=api_key)
+    prompt = (
+        "請將以下英文文章翻譯成繁體中文，保留段落結構。\n"
+        "只輸出繁體中文翻譯，不需要重複原文。\n\n"
+        f"標題：{title}\n\n"
+        f"原文：\n{en_text}"
+    )
+    try:
+        resp = client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=4000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return en_text, resp.content[0].text.strip()
+    except Exception as e:
+        return en_text, f"(翻譯失敗：{e})"
+
+
 def fetch_all_texts_parallel(articles: list, max_workers: int = 6) -> dict:
     results = {}
     # Pre-fill articles that already have content from RSS
@@ -647,7 +700,22 @@ def render_articles(articles: list):
                     st.caption("🇹🇼 中文摘要")
                     st.write(item["summary_zh"] or "—")
 
-                st.markdown(f"[閱讀完整文章 →]({item['url']})")
+                with st.expander("📖 展開閱讀中英對照全文"):
+                    cache_key = f"fulltext_{item['url']}"
+                    if cache_key not in st.session_state:
+                        with st.spinner("正在抓取並翻譯全文..."):
+                            en_text, zh_text = fetch_and_translate(item["url"], item["title"])
+                            st.session_state[cache_key] = (en_text, zh_text)
+                    en_text, zh_text = st.session_state[cache_key]
+                    col_en, col_zh = st.columns(2)
+                    with col_en:
+                        st.caption("🇺🇸 English")
+                        st.markdown(en_text)
+                    with col_zh:
+                        st.caption("🇹🇼 繁體中文")
+                        st.markdown(zh_text)
+
+                st.markdown(f"[原文連結 →]({item['url']})")
 
         st.write("")
 
