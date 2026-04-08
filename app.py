@@ -756,12 +756,6 @@ def main():
             default=FREE_SOURCES,
         )
         st.divider()
-        selected_paid = st.multiselect(
-            "🔒 Paid Media",
-            options=PAID_SOURCES,
-            default=PAID_SOURCES,
-        )
-        st.divider()
         all_cats = list(CATEGORIES.keys())
         selected_cats = st.multiselect("文章分類篩選", options=all_cats, default=all_cats)
         st.divider()
@@ -775,7 +769,7 @@ def main():
         if "cache_status" in st.session_state:
             st.caption(st.session_state["cache_status"])
 
-    selected_sources = selected_free + selected_paid
+    selected_sources = selected_free
 
     # Fetch data — persistent disk cache, only re-fetch selected sources
     if "article_cache" not in st.session_state:
