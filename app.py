@@ -743,7 +743,7 @@ def main():
     st.title("🛴 Micromobility News Dashboard")
 
     FREE_SOURCES  = ["micromobility.io", "Electrek E-bikes", "Zag Daily", "Bikerumor", "Electric Bike Review", "Electric Bike Report", "BikeRadar"]
-    PAID_SOURCES  = ["Bike-EU Germany", "Bike-EU Netherlands"]
+    PAID_SOURCES  = []  # Bike-EU Germany / Bike-EU Netherlands hidden but kept in SCRAPER_MAP as reference
 
     # Sidebar
     with st.sidebar:
