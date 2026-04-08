@@ -948,56 +948,45 @@ def main():
         st.session_state["selected_cats_set"] = set(all_cats)
     sel: set = st.session_state["selected_cats_set"]
 
-    # Build CSS: scoped to buttons after .cat-filter-anchor marker
-    _r1 = ".element-container:has(.cat-filter-anchor) + [data-testid='stHorizontalBlock']"
-    _r2 = _r1 + " + [data-testid='stHorizontalBlock']"
-
-    def _btn_css(row, col_n, color):
-        c = f"{row} [data-testid='column']:nth-child({col_n})"
-        return (
-            f"{c} [data-testid='baseButton-secondary']"
-            f"{{border:2px solid {color}!important;color:{color}!important;background:transparent!important;}}"
-            f"{c} [data-testid='baseButton-primary']"
-            f"{{background:{color}!important;border:2px solid {color}!important;color:white!important;}}"
+    # Build per-button CSS using unique marker divs inside each column.
+    # Each marker (.cat-m-{safe}) is placed before its button; CSS :has() + adjacent
+    # sibling (+) targets only that button, regardless of column position.
+    cat_css = ""
+    for cat in all_cats:
+        color = CAT_COLORS[cat]
+        safe = "".join(c if c.isalnum() else "-" for c in cat).lower()
+        m = f".element-container:has(.cat-m-{safe}) + .element-container button"
+        cat_css += (
+            f"{m}{{border-radius:12px!important;height:64px!important;"
+            f"font-size:13px!important;font-weight:700!important;}}"
+            f"{m}[kind='secondary']{{border:2px solid {color}!important;"
+            f"color:{color}!important;background:transparent!important;}}"
+            f"{m}[kind='primary']{{background:{color}!important;"
+            f"border:2px solid {color}!important;color:white!important;}}"
         )
+    st.markdown(f"<style>{cat_css}</style>", unsafe_allow_html=True)
 
-    _base = (
-        f"{_r1} [data-testid='baseButton-secondary'],{_r1} [data-testid='baseButton-primary'],"
-        f"{_r2} [data-testid='baseButton-secondary'],{_r2} [data-testid='baseButton-primary']"
-    )
-    _color_rules = "".join(
-        [_btn_css(_r1, i + 1, CAT_COLORS[c]) for i, c in enumerate(all_cats[:5])] +
-        [_btn_css(_r2, i + 1, CAT_COLORS[c]) for i, c in enumerate(all_cats[5:])]
-    )
-    st.markdown(
-        "<style>"
-        + _base
-        + "{border-radius:12px!important;height:64px!important;"
-        + "font-size:13px!important;font-weight:700!important;width:100%!important;}"
-        + _color_rules
-        + "</style><div class='cat-filter-anchor'></div>",
-        unsafe_allow_html=True,
-    )
+    def _cat_btn(cat: str):
+        safe = "".join(c if c.isalnum() else "-" for c in cat).lower()
+        active = cat in sel
+        st.markdown(f"<div class='cat-m-{safe}' style='display:none'></div>",
+                    unsafe_allow_html=True)
+        if st.button(CAT_DISPLAY[cat], key=f"cat_{cat}",
+                     use_container_width=True, type="primary" if active else "secondary"):
+            sel.discard(cat) if active else sel.add(cat)
+            st.rerun()
 
     # Row 1 — 5 categories
     cols1 = st.columns(5)
     for i, cat in enumerate(all_cats[:5]):
         with cols1[i]:
-            active = cat in sel
-            if st.button(CAT_DISPLAY[cat], key=f"cat_{cat}",
-                         use_container_width=True, type="primary" if active else "secondary"):
-                sel.discard(cat) if active else sel.add(cat)
-                st.rerun()
+            _cat_btn(cat)
 
     # Row 2 — remaining 2 categories (left-aligned)
     cols2 = st.columns(5)
     for i, cat in enumerate(all_cats[5:]):
         with cols2[i]:
-            active = cat in sel
-            if st.button(CAT_DISPLAY[cat], key=f"cat_{cat}",
-                         use_container_width=True, type="primary" if active else "secondary"):
-                sel.discard(cat) if active else sel.add(cat)
-                st.rerun()
+            _cat_btn(cat)
 
     selected_cats = list(sel) if sel else all_cats
 
