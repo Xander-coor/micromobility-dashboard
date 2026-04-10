@@ -578,9 +578,10 @@ def fetch_article_text_full(url: str) -> str:
         return ""
 
 
-def fetch_and_translate(url: str, title: str) -> tuple[str, str]:
-    """Fetch full article and return (english_text, chinese_translation)."""
-    en_text = fetch_article_text_full(url)
+def fetch_and_translate(url: str, title: str, prefetched_text: str = "") -> tuple[str, str]:
+    """Fetch full article and return (english_text, chinese_translation).
+    Falls back to prefetched_text (e.g. RSS content) if full fetch fails."""
+    en_text = fetch_article_text_full(url) or prefetched_text
     if not en_text:
         return "(無法取得全文)", ""
 
@@ -799,7 +800,9 @@ def render_articles(articles: list, key_prefix: str = "", sort_asc: bool = False
                 if st.session_state.get(show_key, False):
                     if cache_key not in st.session_state:
                         with st.spinner("正在抓取並翻譯全文..."):
-                            st.session_state[cache_key] = fetch_and_translate(item["url"], item["title"])
+                            st.session_state[cache_key] = fetch_and_translate(
+                                item["url"], item["title"], item.get("prefetched_text", "")
+                            )
                     en_text, zh_text = st.session_state[cache_key]
                     if en_text.startswith("(無法取得全文)"):
                         st.warning("此文章無法擷取全文（可能有付費牆或 JS 渲染），請直接點原文連結閱讀。")
