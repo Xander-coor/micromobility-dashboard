@@ -337,63 +337,8 @@ def scrape_zagdaily(days: int = 7) -> list:
 
 
 def scrape_electricbikereview(days: int = 7) -> list:
-    """electricbikereview.com — main page reviews + RSS news."""
-    articles = []
-    today = datetime.now()
-    cutoff = today - timedelta(days=days)
-    seen_urls: set[str] = set()
-
-    # Part 1: main page reviews (dates unavailable, use today as placeholder)
-    try:
-        resp = requests.get("https://electricbikereview.com/", timeout=15, headers=HEADERS)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-        for item in soup.find_all("div", class_="review-item-wrapper"):
-            h2 = item.find("h2", class_="title")
-            if not h2:
-                continue
-            a = h2.find("a")
-            if not a:
-                continue
-            title = a.get_text(strip=True)
-            url = a.get("href", "")
-            if title and url and url not in seen_urls:
-                seen_urls.add(url)
-                articles.append(make_article(title, today, url, "Electric Bike Review"))
-    except Exception as e:
-        st.error(f"[Electric Bike Review] 主頁抓取失敗：{e}")
-
-    # Part 2: RSS news with date filter
-    try:
-        rss = requests.get("https://electricbikereview.com/feed/", timeout=15, headers=HEADERS)
-        rss.raise_for_status()
-        soup2 = BeautifulSoup(rss.content, "xml")
-        for item in soup2.find_all("item"):
-            title_tag = item.find("title")
-            link_tag  = item.find("link")
-            pub_tag   = item.find("pubDate")
-            content_tag = item.find("encoded")
-            if not title_tag or not link_tag:
-                continue
-            title = title_tag.get_text(strip=True)
-            url   = link_tag.get_text(strip=True)
-            if url in seen_urls:
-                continue
-            seen_urls.add(url)
-            try:
-                date_obj = parsedate_to_datetime(pub_tag.get_text(strip=True)).replace(tzinfo=None) if pub_tag else today
-            except Exception:
-                date_obj = today
-            if date_obj < cutoff:
-                break
-            plain_text = ""
-            if content_tag:
-                plain_text = BeautifulSoup(content_tag.get_text(), "html.parser").get_text(separator="\n", strip=True)[:2000]
-            articles.append(make_article(title, date_obj, url, "Electric Bike Review", plain_text))
-    except Exception as e:
-        st.error(f"[Electric Bike Review] RSS抓取失敗：{e}")
-
-    return articles
+    """electricbikereview.com — RSS feed with proper dates."""
+    return scrape_rss("https://electricbikereview.com/feed/", "Electric Bike Review", days)
 
 
 def scrape_electricbikereport(days: int = 7) -> list:
