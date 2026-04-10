@@ -82,9 +82,6 @@ SOURCE_ICONS = {
     "BikeRadar": "🎯",
     "Cycling Electric": "⚡",
     "Cycling Industry News": "🏭",
-    "中國電動兩輪": "🇨🇳",
-    "中國共享出行": "🚲",
-    "台灣電動出行": "🇹🇼",
     "Bike-EU Germany": "🇩🇪",
     "Bike-EU Netherlands": "🇳🇱",
 }
@@ -99,9 +96,6 @@ SOURCES = {
     "BikeRadar": "https://www.bikeradar.com/electric-bikes",
     "Cycling Electric": "https://www.cyclingelectric.com/type/news",
     "Cycling Industry News": "https://cyclingindustry.news/niche/news-50-968/",
-    "中國電動兩輪": "https://news.google.com/rss/search?q=雅迪+愛瑪+電動自行車+行業&hl=zh-CN&gl=CN&ceid=CN:zh-Hans",
-    "中國共享出行": "https://news.google.com/rss/search?q=共享單車+哈囉+共享出行&hl=zh-CN&gl=CN&ceid=CN:zh-Hans",
-    "台灣電動出行": "https://news.google.com/rss/search?q=電動機車+電動自行車+共享&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
     "Bike-EU Germany": "https://www.bike-eu.com/germany",
     "Bike-EU Netherlands": "https://www.bike-eu.com/the-netherlands",
 }
@@ -289,9 +283,8 @@ def scrape_electrek(days: int = 7) -> list:
 
 
 def scrape_rss(feed_url: str, source_name: str, days: int = 7,
-               extra_headers: dict = None, skip_old: bool = False) -> list:
-    """Generic RSS scraper — works for any WordPress-style RSS feed.
-    skip_old=True uses continue instead of break (for feeds not sorted by date, e.g. Google News)."""
+               extra_headers: dict = None) -> list:
+    """Generic RSS scraper — works for any WordPress-style RSS feed."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     articles = []
 
@@ -330,10 +323,7 @@ def scrape_rss(feed_url: str, source_name: str, days: int = 7,
             continue
 
         if date_obj < cutoff:
-            if skip_old:
-                continue
-            else:
-                break
+            break
 
         plain_text = ""
         if content_tag:
@@ -740,15 +730,6 @@ SCRAPER_MAP = {
     "BikeRadar": scrape_bikeradar,
     "Cycling Electric": lambda days: scrape_rss("https://www.cyclingelectric.com/type/news/feed", "Cycling Electric", days),
     "Cycling Industry News": lambda days: scrape_rss("https://cyclingindustry.news/niche/news-50-968/feed/", "Cycling Industry News", days),
-    "中國電動兩輪": lambda days: scrape_rss(
-        "https://news.google.com/rss/search?q=%E9%9B%85%E8%BF%AA+%E7%88%B1%E7%8E%9B+%E7%94%B5%E5%8A%A8%E8%87%AA%E8%A1%8C%E8%BD%A6+%E8%A1%8C%E4%B8%9A&hl=zh-CN&gl=CN&ceid=CN:zh-Hans",
-        "中國電動兩輪", days, skip_old=True),
-    "中國共享出行": lambda days: scrape_rss(
-        "https://news.google.com/rss/search?q=%E5%85%B1%E4%BA%AB%E5%8D%95%E8%BD%A6+%E5%93%88%E5%95%B0+%E5%85%B1%E4%BA%AB%E5%87%BA%E8%A1%8C&hl=zh-CN&gl=CN&ceid=CN:zh-Hans",
-        "中國共享出行", days, skip_old=True),
-    "台灣電動出行": lambda days: scrape_rss(
-        "https://news.google.com/rss/search?q=%E9%9B%BB%E5%8B%95%E6%A9%9F%E8%BB%8A+%E9%9B%BB%E5%8B%95%E8%87%AA%E8%A1%8C%E8%BB%8A+%E5%85%B1%E4%BA%AB&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-        "台灣電動出行", days, skip_old=True),
     "Bike-EU Germany": lambda days: scrape_bikeeu("https://www.bike-eu.com/germany", "Bike-EU Germany", days),
     "Bike-EU Netherlands": lambda days: scrape_bikeeu("https://www.bike-eu.com/the-netherlands", "Bike-EU Netherlands", days),
 }
@@ -876,7 +857,7 @@ def main():
     )
     st.title("🛴 Micromobility News Dashboard")
 
-    FREE_SOURCES  = ["micromobility.io", "Electrek E-bikes", "Zag Daily", "Bikerumor", "Electric Bike Review", "Electric Bike Report", "BikeRadar", "Cycling Electric", "Cycling Industry News", "中國電動兩輪", "中國共享出行", "台灣電動出行"]
+    FREE_SOURCES  = ["micromobility.io", "Electrek E-bikes", "Zag Daily", "Bikerumor", "Electric Bike Review", "Electric Bike Report", "BikeRadar", "Cycling Electric", "Cycling Industry News"]
     PAID_SOURCES  = []  # Bike-EU Germany / Bike-EU Netherlands hidden but kept in SCRAPER_MAP as reference
 
     # Sidebar
