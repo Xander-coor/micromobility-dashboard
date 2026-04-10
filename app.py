@@ -337,8 +337,73 @@ def scrape_zagdaily(days: int = 7) -> list:
 
 
 def scrape_electricbikereview(days: int = 7) -> list:
-    """electricbikereview.com — RSS feed with proper dates."""
-    return scrape_rss("https://electricbikereview.com/feed/", "Electric Bike Review", days)
+    """electricbikereview.com — scrape homepage for latest reviews, dates from JSON-LD schema."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    articles = []
+
+    _SKIP = {"best", "category", "brand", "tag", "advertise", "about",
+             "contact", "page", "privacy", "terms", "sitemap"}
+    _HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+    try:
+        resp = requests.get("https://electricbikereview.com/", timeout=15, headers=_HEADERS)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+    except Exception as e:
+        st.error(f"[Electric Bike Review] 首頁抓取失敗：{e}")
+        return articles
+
+    # 收集首頁文章連結（格式：/brand/model-review/）
+    seen, review_links = set(), []
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        parts = href.replace("https://electricbikereview.com/", "").strip("/").split("/")
+        if (len(parts) == 2 and parts[0] and parts[1]
+                and not any(kw in parts[0] for kw in _SKIP)):
+            if href not in seen:
+                seen.add(href)
+                review_links.append(href)
+
+    def _fetch_article(url: str):
+        try:
+            r = requests.get(url, timeout=15, headers=_HEADERS)
+            art = BeautifulSoup(r.text, "html.parser")
+
+            # 從 JSON-LD 取 datePublished
+            date_obj = None
+            for script in art.find_all("script", type="application/ld+json"):
+                try:
+                    data = json.loads(script.string or "")
+                    graph = data.get("@graph", [data])
+                    for node in graph:
+                        if "datePublished" in node:
+                            raw = node["datePublished"][:19]  # "2026-04-09T22:00:56"
+                            date_obj = datetime.strptime(raw, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+                            break
+                except Exception:
+                    pass
+                if date_obj:
+                    break
+
+            if not date_obj or date_obj < cutoff:
+                return None
+
+            h1 = art.find("h1")
+            title = h1.get_text(strip=True) if h1 else url.split("/")[-2].replace("-", " ").title()
+            return make_article(title, date_obj.replace(tzinfo=None), url, "Electric Bike Review", "")
+        except Exception:
+            return None
+
+    # 並行抓取（最多 12 篇，避免請求過多）
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futures = {ex.submit(_fetch_article, u): u for u in review_links[:12]}
+        for f in as_completed(futures):
+            result = f.result()
+            if result:
+                articles.append(result)
+
+    articles.sort(key=lambda x: x["date"], reverse=True)
+    return articles
 
 
 def scrape_electricbikereport(days: int = 7) -> list:
