@@ -80,6 +80,8 @@ SOURCE_ICONS = {
     "Electric Bike Review": "🔋",
     "Electric Bike Report": "📊",
     "BikeRadar": "🎯",
+    "Cycling Electric": "⚡",
+    "Cycling Industry News": "🏭",
     "Bike-EU Germany": "🇩🇪",
     "Bike-EU Netherlands": "🇳🇱",
 }
@@ -92,6 +94,8 @@ SOURCES = {
     "Electric Bike Review": "https://electricbikereview.com/feed/",
     "Electric Bike Report": "https://electricbikereport.com/electric-bike-news/",
     "BikeRadar": "https://www.bikeradar.com/electric-bikes",
+    "Cycling Electric": "https://www.cyclingelectric.com/type/news",
+    "Cycling Industry News": "https://cyclingindustry.news/niche/news-50-968/",
     "Bike-EU Germany": "https://www.bike-eu.com/germany",
     "Bike-EU Netherlands": "https://www.bike-eu.com/the-netherlands",
 }
@@ -724,6 +728,8 @@ SCRAPER_MAP = {
     "Electric Bike Review": scrape_electricbikereview,
     "Electric Bike Report": scrape_electricbikereport,
     "BikeRadar": scrape_bikeradar,
+    "Cycling Electric": lambda days: scrape_rss("https://www.cyclingelectric.com/type/news/feed", "Cycling Electric", days),
+    "Cycling Industry News": lambda days: scrape_rss("https://cyclingindustry.news/niche/news-50-968/feed/", "Cycling Industry News", days),
     "Bike-EU Germany": lambda days: scrape_bikeeu("https://www.bike-eu.com/germany", "Bike-EU Germany", days),
     "Bike-EU Netherlands": lambda days: scrape_bikeeu("https://www.bike-eu.com/the-netherlands", "Bike-EU Netherlands", days),
 }
@@ -851,7 +857,7 @@ def main():
     )
     st.title("🛴 Micromobility News Dashboard")
 
-    FREE_SOURCES  = ["micromobility.io", "Electrek E-bikes", "Zag Daily", "Bikerumor", "Electric Bike Review", "Electric Bike Report", "BikeRadar"]
+    FREE_SOURCES  = ["micromobility.io", "Electrek E-bikes", "Zag Daily", "Bikerumor", "Electric Bike Review", "Electric Bike Report", "BikeRadar", "Cycling Electric", "Cycling Industry News"]
     PAID_SOURCES  = []  # Bike-EU Germany / Bike-EU Netherlands hidden but kept in SCRAPER_MAP as reference
 
     # Sidebar
