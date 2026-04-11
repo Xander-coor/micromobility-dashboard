@@ -26,6 +26,37 @@ def save_cache(cache: dict, timestamps: dict):
         json.dump(serializable, f, ensure_ascii=False, indent=2)
 
 
+TRANSLATION_CACHE_FILE = "translations_cache.json"
+
+def get_cached_translation(url: str) -> tuple[str, str] | None:
+    """Return (en_text, zh_text) from disk if exists, else None."""
+    if not os.path.exists(TRANSLATION_CACHE_FILE):
+        return None
+    try:
+        with open(TRANSLATION_CACHE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        entry = data.get(url)
+        if entry:
+            return entry["en"], entry["zh"]
+    except Exception:
+        pass
+    return None
+
+
+def save_translation_to_cache(url: str, en_text: str, zh_text: str):
+    """Persist a translation result to disk so all users share it."""
+    data = {}
+    if os.path.exists(TRANSLATION_CACHE_FILE):
+        try:
+            with open(TRANSLATION_CACHE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+    data[url] = {"en": en_text, "zh": zh_text}
+    with open(TRANSLATION_CACHE_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
 def load_cache() -> tuple[dict, dict, str]:
     """Load cache from disk. Returns (cache_dict, timestamps_dict, status_message)."""
     if not os.path.exists(CACHE_FILE):
@@ -815,10 +846,20 @@ def render_articles(articles: list, key_prefix: str = "", sort_asc: bool = False
 
                 if st.session_state.get(show_key, False):
                     if cache_key not in st.session_state:
-                        with st.spinner("正在抓取並翻譯全文..."):
-                            st.session_state[cache_key] = fetch_and_translate(
-                                item["url"], item["title"], item.get("prefetched_text", "")
-                            )
+                        # 1. 先查磁碟快取（跨 session、跨使用者共享）
+                        disk_hit = get_cached_translation(item["url"])
+                        if disk_hit:
+                            st.session_state[cache_key] = disk_hit
+                        else:
+                            # 2. 沒有才呼叫 Claude，並存回磁碟
+                            with st.spinner("正在抓取並翻譯全文..."):
+                                result = fetch_and_translate(
+                                    item["url"], item["title"], item.get("prefetched_text", "")
+                                )
+                            st.session_state[cache_key] = result
+                            en_t, zh_t = result
+                            if not en_t.startswith("("):
+                                save_translation_to_cache(item["url"], en_t, zh_t)
                     en_text, zh_text = st.session_state[cache_key]
                     if en_text.startswith("(無法取得全文)"):
                         st.warning("此文章無法擷取全文（可能有付費牆或 JS 渲染），請直接點原文連結閱讀。")
