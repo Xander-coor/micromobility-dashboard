@@ -950,26 +950,44 @@ def main():
     cache = st.session_state["article_cache"]
     timestamps: dict = st.session_state.setdefault("cache_timestamps", {})
 
+    # Determine which sources need fetching this trigger
     if not cache:
-        to_refresh = FREE_SOURCES
+        triggered = FREE_SOURCES
     elif refresh:
-        to_refresh = sources_to_refresh
+        triggered = sources_to_refresh
     else:
-        to_refresh = []
+        triggered = []
 
-    if to_refresh:
-        for source in to_refresh:
-            with st.spinner(f"抓取 {source}..."):
-                arts = SCRAPER_MAP[source](days)
-                if arts:
-                    existing_by_url = {a["url"]: a for a in cache.get(source, [])}
-                    cache[source] = generate_summaries(arts, existing_by_url, force=force_regen)
-                    timestamps[source] = datetime.now().isoformat()
+    # On new trigger, initialise the pending queue
+    if triggered and "pending_sources" not in st.session_state:
+        st.session_state["pending_sources"] = list(triggered)
+        st.session_state["total_to_fetch"] = len(triggered)
 
-        st.session_state["article_cache"] = cache
+    # Process ONE source per rerun → renders partial results between each
+    if st.session_state.get("pending_sources"):
+        pending = st.session_state["pending_sources"]
+        total   = st.session_state.get("total_to_fetch", len(pending))
+        done    = total - len(pending)
+        source  = pending[0]
+
+        with st.spinner(f"抓取 {source}… ({done + 1}/{total})"):
+            arts = SCRAPER_MAP[source](days)
+            if arts:
+                existing_by_url = {a["url"]: a for a in cache.get(source, [])}
+                cache[source] = generate_summaries(arts, existing_by_url, force=force_regen)
+            timestamps[source] = datetime.now().isoformat()
+
+        pending.pop(0)
+        st.session_state["article_cache"]    = cache
         st.session_state["cache_timestamps"] = timestamps
-        save_cache(cache, timestamps)
-        st.session_state["fetched_at"] = datetime.now()
+
+        if not pending:
+            save_cache(cache, timestamps)
+            st.session_state["fetched_at"] = datetime.now()
+            del st.session_state["pending_sources"]
+            del st.session_state["total_to_fetch"]
+
+        st.rerun()
     elif "fetched_at" not in st.session_state and cache:
         st.session_state["fetched_at"] = datetime.fromtimestamp(
             os.path.getmtime(CACHE_FILE)
