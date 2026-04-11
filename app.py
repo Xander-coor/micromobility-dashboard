@@ -858,7 +858,7 @@ def render_articles(articles: list, key_prefix: str = "", sort_asc: bool = False
                                 )
                             st.session_state[cache_key] = result
                             en_t, zh_t = result
-                            if not en_t.startswith("("):
+                            if en_t and not en_t.startswith("(") and zh_t and not zh_t.startswith("("):
                                 save_translation_to_cache(item["url"], en_t, zh_t)
                     en_text, zh_text = st.session_state[cache_key]
                     if en_text.startswith("(無法取得全文)"):
